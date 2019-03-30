@@ -3,6 +3,8 @@ from serial import Serial
 import time
 import struct
 import datetime
+import sys
+from pynput import keyboard
 
 # service for communication, as per docs
 BLE_SERVICE = [0x18, 0x00]
@@ -26,10 +28,12 @@ class Ganglion():
         self.baud_rate = baud_rate
         self.board = bglib.BGLib()
         self.mac = mac_addrs
-        self.board.debug = True
+        self.board.debug = False
 
         self.state = STATE_STANDBY
         self.connect_to = False
+        self.disconnecting = False
+        self.received_found = False
 
         # create serial port object
         try:
@@ -92,18 +96,28 @@ class Ganglion():
         def ble_evt_attclient_find_information_found(sender, args):
 
             # found "service" attribute groups (UUID=0x2800), check for heart rate service
-            if '2A00' == ''.join(['%02X' % b for b in args['uuid'][::-1]]):
-                self.name_handle = args['chrhandle']
-
+            # for arg in args:
+            #     print(arg)
+            #     print(args[arg])
+            # if '2A00' == ''.join(['%02X' % b for b in args['uuid'][::-1]]):
+            #     self.name_handle = args['chrhandle']
+            print(''.join(['%02X' % b for b in args['uuid'][::-1]]))
+            print(self.received_found)
             if BLE_CHAR_RECEIVE.upper() == ''.join(['%02X' % b for b in args['uuid'][::-1]]):
                 print('Receive characteristic found!')
+                self.received_found = True
                 self.receive_handle = args['chrhandle']
 
-            if BLE_CHAR_SEND.upper() == ''.join(['%02X' % b for b in args['uuid'][::-1]]):
+            elif '2902' == ''.join(['%02X' % b for b in args['uuid'][::-1]]) and self.received_found:
+                print('Receive cccs characteristic found!')
+                self.receive_handle_ccc = args['chrhandle']
+                self.received_found = False
+
+            elif BLE_CHAR_SEND.upper() == ''.join(['%02X' % b for b in args['uuid'][::-1]]):
                 print('Send characteristic found!')
                 self.send_handle = args['chrhandle']
 
-            if BLE_CHAR_DISCONNECT.upper() == ''.join(['%02X' % b for b in args['uuid'][::-1]]):
+            elif BLE_CHAR_DISCONNECT.upper() == ''.join(['%02X' % b for b in args['uuid'][::-1]]):
                 print('Disconnect characteristic found!')
                 self.disconnect_handle = args['chrhandle']
 
@@ -119,7 +133,8 @@ class Ganglion():
                     # found the measurement + client characteristic configuration, so enable notifications
                     # (this is done by writing 0x01 to the client characteristic configuration attribute)
                     self.state = STATE_LISTENING_MEASUREMENTS
-                    self.board.send_command(self.ser, self.board.ble_cmd_attclient_attribute_write(self.connection_handle, self.receive_handle, [0x62, 0x00]))
+                    self.board.send_command(self.ser, self.board.ble_cmd_attclient_attribute_write(self.connection_handle, self.receive_handle_ccc, [0x01, 0x00]))
+                    self.board.send_command(self.ser, self.board.ble_cmd_attclient_attribute_write(self.connection_handle, self.send_handle, [0x62, 0x00]))
                     self.board.check_activity(self.ser, 1)
                 else:
                     print "Could not find send attribute"
@@ -128,7 +143,6 @@ class Ganglion():
         def my_ble_evt_attclient_attribute_value(sender, args):
 
             # check for a new value from the connected peripheral's heart rate measurement attribute
-            print(args['atthandle'])
             if args['connection'] == self.connection_handle and args['atthandle'] == self.receive_handle:
                 print(args['value'])
 
@@ -175,12 +189,15 @@ class Ganglion():
         self.board.send_command(self.ser, self.board.ble_cmd_gap_discover(2))
         self.board.check_activity(self.ser, 1)
 
-        while True: #not self.state:
+
+        while not self.disconnecting: #not self.state:
             # check for all incoming data (no timeout, non-blocking)
             self.board.check_activity(self.ser, 1)
 
             # don't burden the CPU
             time.sleep(0.01)
+
+        quit()
 
     def send_command(self, char):
         pass
@@ -223,6 +240,7 @@ class Ganglion():
         # stop scanning if we are scanning already
         self.board.send_command(self.ser, self.board.ble_cmd_gap_end_procedure())
         self.board.check_activity(self.ser, 1)
+        self.disconnecting = True
 
         print('Bye')
 
