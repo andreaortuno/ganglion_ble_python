@@ -5,9 +5,10 @@ import struct
 import datetime
 import sys
 from pynput import keyboard
+import struct
 
 # service for communication, as per docs
-BLE_SERVICE = [0x18, 0x00]
+BLE_SERVICE = [0xfe, 0x84]
 
 # characteristics of interest
 BLE_CHAR_RECEIVE = "2d30c082f39f4ce6923f3484ea480596"
@@ -19,6 +20,7 @@ STATE_CONNECTING = 1
 STATE_FINDING_SERVICES = 2
 STATE_FINDING_ATTRIBUTES = 3
 STATE_LISTENING_MEASUREMENTS = 4
+STATE_STREAMING = 5
 
 
 
@@ -31,7 +33,7 @@ class Ganglion():
         self.board.debug = False
 
         self.state = STATE_STANDBY
-        self.connect_to = False
+        self.connected = False
         self.disconnecting = False
         self.received_found = False
 
@@ -73,21 +75,19 @@ class Ganglion():
                                 ad_services.append(this_field[-1 - i*16 : -17 - i*16 : -1])
 
             # connect to Ganglion based on MAC address
-            if self.connect_to and ''.join(['%02X' % b for b in args["sender"][::-1]]) == self.mac:
-                print('Ganglion found! Trying to Connect...')
+            if not self.connected and ''.join(['%02X' % b for b in args["sender"][::-1]]) == self.mac:
                 self.board.send_command(self.ser, self.board.ble_cmd_gap_connect_direct(args['sender'], args['address_type'], 0x20, 0x30, 0x100, 0))
                 self.board.check_activity(self.ser, 1)
                 self.state = STATE_CONNECTING
-                self.connect_to = False
 
         # connection_status handler
         def my_ble_evt_connection_status(sender, args):
 
             if (args['flags'] & 0x05) == 0x05:
-                # connected, now perform service discovery
+                # connected, now perform characteristic discovery
                 print "Connected to %s" % ':'.join(['%02X' % b for b in args['address'][::-1]])
                 self.connection_handle = args['connection']
-                # self.board.send_command(self.ser, self.board.ble_cmd_attclient_read_by_group_type(args['connection'], 0x0001, 0xFFFF, list(reversed(BLE_SERVICE))))
+
                 self.board.send_command(self.ser, self.board.ble_cmd_attclient_find_information(args['connection'], 0x0001, 0xFFFF))
                 self.board.check_activity(self.ser, 1)
                 self.state = STATE_FINDING_ATTRIBUTES
@@ -95,21 +95,14 @@ class Ganglion():
         # attclient_group_found handler
         def ble_evt_attclient_find_information_found(sender, args):
 
-            # found "service" attribute groups (UUID=0x2800), check for heart rate service
-            # for arg in args:
-            #     print(arg)
-            #     print(args[arg])
-            # if '2A00' == ''.join(['%02X' % b for b in args['uuid'][::-1]]):
-            #     self.name_handle = args['chrhandle']
-            print(''.join(['%02X' % b for b in args['uuid'][::-1]]))
-            print(self.received_found)
+            # check for OpenBCI characteristics
             if BLE_CHAR_RECEIVE.upper() == ''.join(['%02X' % b for b in args['uuid'][::-1]]):
                 print('Receive characteristic found!')
                 self.received_found = True
                 self.receive_handle = args['chrhandle']
 
             elif '2902' == ''.join(['%02X' % b for b in args['uuid'][::-1]]) and self.received_found:
-                print('Receive cccs characteristic found!')
+                print('Receive ccc characteristic found!')
                 self.receive_handle_ccc = args['chrhandle']
                 self.received_found = False
 
@@ -120,45 +113,21 @@ class Ganglion():
             elif BLE_CHAR_DISCONNECT.upper() == ''.join(['%02X' % b for b in args['uuid'][::-1]]):
                 print('Disconnect characteristic found!')
                 self.disconnect_handle = args['chrhandle']
-
-        # attclient_procedure_completed handler
-        def my_ble_evt_attclient_procedure_completed(sender, args):
-            # check if we just finished searching for attributes
-            if self.state == STATE_FINDING_ATTRIBUTES:
-
-
-                if self.send_handle > 0:
-                    print "Writting to send characteristic"
-
-                    # found the measurement + client characteristic configuration, so enable notifications
-                    # (this is done by writing 0x01 to the client characteristic configuration attribute)
-                    self.state = STATE_LISTENING_MEASUREMENTS
-                    self.board.send_command(self.ser, self.board.ble_cmd_attclient_attribute_write(self.connection_handle, self.receive_handle_ccc, [0x01, 0x00]))
-                    self.board.send_command(self.ser, self.board.ble_cmd_attclient_attribute_write(self.connection_handle, self.send_handle, [0x62, 0x00]))
-                    self.board.check_activity(self.ser, 1)
-                else:
-                    print "Could not find send attribute"
+                self.connected = True
 
         # attclient_attribute_value handler
         def my_ble_evt_attclient_attribute_value(sender, args):
-
             # check for a new value from the connected peripheral's heart rate measurement attribute
             if args['connection'] == self.connection_handle and args['atthandle'] == self.receive_handle:
                 print(args['value'])
-
-        def my_ble_rsp_attclient_read_long(sender, args):
-            for arg in args:
-                print(arg)
-                print(args[arg])
+                self.bytes2data(args['value'])
 
 
         # add handlers for BGAPI events
         self.board.ble_evt_gap_scan_response += my_ble_evt_gap_scan_response
         self.board.ble_evt_connection_status += my_ble_evt_connection_status
         self.board.ble_evt_attclient_find_information_found += ble_evt_attclient_find_information_found
-        self.board.ble_evt_attclient_procedure_completed += my_ble_evt_attclient_procedure_completed
         self.board.ble_evt_attclient_attribute_value += my_ble_evt_attclient_attribute_value
-        self.board.ble_rsp_attclient_read_long += my_ble_rsp_attclient_read_long
 
 
     def connect(self):
@@ -185,30 +154,38 @@ class Ganglion():
 
         # start scanning now
         print "Scanning for Ganglions..."
-        self.connect_to = True
+        self.connected = False
         self.board.send_command(self.ser, self.board.ble_cmd_gap_discover(2))
         self.board.check_activity(self.ser, 1)
 
 
-        while not self.disconnecting: #not self.state:
+        while not self.connected: #not self.state:
             # check for all incoming data (no timeout, non-blocking)
             self.board.check_activity(self.ser, 1)
 
             # don't burden the CPU
             time.sleep(0.01)
 
-        quit()
+    def send_board_command(self, string):
+        # check if we just finished searching for attributes
+        if self.connected == True:
+            for char in string:
+                if self.send_handle > 0:
+                    print "Writting to send characteristic"
+                    self.state = STATE_LISTENING_MEASUREMENTS
+                    self.board.send_command(self.ser, self.board.ble_cmd_attclient_attribute_write(self.connection_handle, self.send_handle, [ord(char), 0x00]))
+                    self.board.check_activity(self.ser, 1)
+                else:
+                    print "Could not find send attribute"
 
-    def send_command(self, char):
-        pass
 
     def start_stream(self):
-        self.send_command('b')
-        pass
-
-    def stop_stream(self):
-        self.send_command('s')
-        pass
+        # found the measurement + client characteristic configuration, so enable notifications
+        # (this is done by writing 0x01 to the client characteristic configuration attribute)
+        print('Starting stream')
+        while True:
+            self.board.send_command(self.ser, self.board.ble_cmd_attclient_attribute_write(self.connection_handle, self.receive_handle_ccc, [0x01, 0x00]))
+            self.board.check_activity(self.ser, 1)
 
     def set_channels(self, chan_list):
         """
@@ -218,15 +195,13 @@ class Ganglion():
         off_chars = '1234'
         out_string = ''
         for indx, chan in enumerate(chan_list):
-            print(chan, indx)
             if chan == 1:
                 out_string += on_chars[indx]
             elif chan == 0:
                 out_string += off_chars[indx]
             else:
                 print("Invalid channel list. The format should be: [1, 1, 1, 1] and it should only have 0 or 1")
-        print(out_string)
-        self.send_command(out_string)
+        self.send_board_command(out_string)
 
     def disconnect(self):
         print("Disconnecting...")
@@ -244,19 +219,33 @@ class Ganglion():
 
         print('Bye')
 
-    def print_raw_data(self):
+    def bytes2data(self, raw_data):
+        start_byte = raw_data[0]
+        data_string = ''
+        if start_byte == 0:
+            for byte in raw_data[1:14]:
+                data_string += '{0:04b}'.format(byte)
+            print(self.decompress_string(data_string, 24))
+        elif start_byte >=1 and start_byte <=100:
+            for byte in raw_data[1:-1]:
+                data_string += '{0:08b}'.format(byte)
+            print(self.decompress_string(data_string, 18))
+        elif start_byte >=101 and start_byte <=200:
+            for byte in raw_data[1:]:
+                data_string += '{0:08b}'.format(byte)
+            print(self.decompress_string(data_string, 19))
+
+    def decompress_string(self, stringdata, window_size):
+        i = 0
+        result = []
+        while i != len(stringdata):
+            if stringdata[i+window_size-1] == '0':
+                result.append(int(stringdata[i:i+window_size-1],2))
+            else:
+                result.append(-int(stringdata[i:i+window_size-1],2))
+            i += window_size
+
+        return result
+
+    def save_to_csv(self, filename='Ganglion_Data'):
         pass
-
-    def get_board_output(self):
-        pass
-
-    def bytes2data(self):
-        pass
-
-
-
-board = Ganglion(port='COM6')
-# board.set_channels([1, 0, 0, 1])
-board.connect()
-# time.sleep(1)
-board.disconnect()
