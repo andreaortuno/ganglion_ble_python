@@ -6,7 +6,7 @@ import datetime
 import sys
 from pynput import keyboard
 import struct
-
+import numpy as np
 # service for communication, as per docs
 BLE_SERVICE = [0xfe, 0x84]
 
@@ -25,7 +25,10 @@ STATE_STREAMING = 5
 
 
 class Ganglion():
-    def __init__(self, port=None, baud_rate=115200, mac_addrs='E65D54F2F438'):
+    def __init__(self, port=None, baud_rate=115200, mac_addrs=None):
+
+        if not port or not mac_addrs:
+            raise ValueError('You need to have a port name adn a mac_addrs')
         self.port = port
         self.baud_rate = baud_rate
         self.board = bglib.BGLib()
@@ -36,6 +39,8 @@ class Ganglion():
         self.connected = False
         self.disconnecting = False
         self.received_found = False
+        self.zero_packet = False
+        self.last_values = np.array([0, 0, 0, 0])
 
         # create serial port object
         try:
@@ -119,7 +124,6 @@ class Ganglion():
         def my_ble_evt_attclient_attribute_value(sender, args):
             # check for a new value from the connected peripheral's heart rate measurement attribute
             if args['connection'] == self.connection_handle and args['atthandle'] == self.receive_handle:
-                print(args['value'])
                 self.bytes2data(args['value'])
 
 
@@ -223,26 +227,38 @@ class Ganglion():
         start_byte = raw_data[0]
         data_string = ''
         if start_byte == 0:
-            for byte in raw_data[1:14]:
-                data_string += '{0:04b}'.format(byte)
-            print(self.decompress_string(data_string, 24))
+            for byte in raw_data[1:13]:
+                data_string += '{0:08b}'.format(byte)
+            self.last_values = np.array(self.decompress_string(data_string, 24))
+            print(self.last_values)
         elif start_byte >=1 and start_byte <=100:
             for byte in raw_data[1:-1]:
                 data_string += '{0:08b}'.format(byte)
-            print(self.decompress_string(data_string, 18))
+            deltas = self.decompress_string(data_string, 19)
+            delta1 , delta2 = np.array(deltas[:4]) , np.array(deltas[4:])
+            self.last_values = self.last_values - delta1
+            print(self.last_values)
+            self.last_values = self.last_values - delta2
+            print(self.last_values)
+
         elif start_byte >=101 and start_byte <=200:
             for byte in raw_data[1:]:
                 data_string += '{0:08b}'.format(byte)
-            print(self.decompress_string(data_string, 19))
+            deltas = self.decompress_string(data_string, 19)
+            delta1 , delta2 = np.array(deltas[:4]) , np.array(deltas[4:])
+            self.last_values = self.last_values - delta1
+            print(self.last_values)
+            self.last_values = self.last_values - delta2
+            print(self.last_values)
 
     def decompress_string(self, stringdata, window_size):
         i = 0
         result = []
         while i != len(stringdata):
             if stringdata[i+window_size-1] == '0':
-                result.append(int(stringdata[i:i+window_size-1],2))
+                result.append(int(stringdata[i:i+window_size-1] + '0',2))
             else:
-                result.append(-int(stringdata[i:i+window_size-1],2))
+                result.append(-int(stringdata[i:i+window_size-1] + '0',2))
             i += window_size
 
         return result
