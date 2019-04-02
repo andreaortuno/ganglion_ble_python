@@ -7,6 +7,8 @@ import sys
 from pynput import keyboard
 import struct
 import numpy as np
+import csv
+
 # service for communication, as per docs
 BLE_SERVICE = [0xfe, 0x84]
 
@@ -124,7 +126,7 @@ class Ganglion():
         def my_ble_evt_attclient_attribute_value(sender, args):
             # check for a new value from the connected peripheral's heart rate measurement attribute
             if args['connection'] == self.connection_handle and args['atthandle'] == self.receive_handle:
-                self.bytes2data(args['value'])
+                self.save_to_csv(self.bytes2data(args['value']))
 
 
         # add handlers for BGAPI events
@@ -172,8 +174,10 @@ class Ganglion():
 
     def send_board_command(self, string):
         # check if we just finished searching for attributes
+        self.board.check_activity(self.ser, 1)
         if self.connected == True:
             for char in string:
+                self.board.check_activity(self.ser, 1)
                 if self.send_handle > 0:
                     print "Writting to send characteristic"
                     self.state = STATE_LISTENING_MEASUREMENTS
@@ -187,9 +191,12 @@ class Ganglion():
         # found the measurement + client characteristic configuration, so enable notifications
         # (this is done by writing 0x01 to the client characteristic configuration attribute)
         print('Starting stream')
+        self.board.check_activity(self.ser, 1)
+
         while True:
             self.board.send_command(self.ser, self.board.ble_cmd_attclient_attribute_write(self.connection_handle, self.receive_handle_ccc, [0x01, 0x00]))
             self.board.check_activity(self.ser, 1)
+            time.sleep(0.01)
 
     def set_channels(self, chan_list):
         """
@@ -227,29 +234,33 @@ class Ganglion():
         start_byte = raw_data[0]
         data_string = ''
         if start_byte == 0:
+            print("ZERO PACKET")
             for byte in raw_data[1:13]:
                 data_string += '{0:08b}'.format(byte)
             self.last_values = np.array(self.decompress_string(data_string, 24))
             print(self.last_values)
+            return [self.last_values]
         elif start_byte >=1 and start_byte <=100:
             for byte in raw_data[1:-1]:
                 data_string += '{0:08b}'.format(byte)
-            deltas = self.decompress_string(data_string, 19)
+            deltas = self.decompress_string(data_string, 18)
             delta1 , delta2 = np.array(deltas[:4]) , np.array(deltas[4:])
-            self.last_values = self.last_values - delta1
+            self.last_values1 = self.last_values - delta1
             print(self.last_values)
-            self.last_values = self.last_values - delta2
+            self.last_values = self.last_values1 - delta2
             print(self.last_values)
+            return [self.last_values1, self.last_values]
 
         elif start_byte >=101 and start_byte <=200:
             for byte in raw_data[1:]:
                 data_string += '{0:08b}'.format(byte)
             deltas = self.decompress_string(data_string, 19)
             delta1 , delta2 = np.array(deltas[:4]) , np.array(deltas[4:])
-            self.last_values = self.last_values - delta1
+            self.last_values1 = self.last_values - delta1
+            print(self.last_values1)
+            self.last_values = self.last_values1 - delta2
             print(self.last_values)
-            self.last_values = self.last_values - delta2
-            print(self.last_values)
+            return [self.last_values1, self.last_values]
 
     def decompress_string(self, stringdata, window_size):
         i = 0
@@ -263,5 +274,16 @@ class Ganglion():
 
         return result
 
-    def save_to_csv(self, filename='Ganglion_Data'):
+    def save_to_csv(self, data, filename='Ganglion_Data.csv'):
+
+        csvData = data
+
+        with open(filename, 'ab') as csvFile:
+            writer = csv.writer(csvFile)
+            writer.writerows(csvData)
+
+        csvFile.close()
+
+
+    def graph_data(self, data):
         pass
