@@ -281,17 +281,17 @@ class Ganglion():
             result -= 1 # correct the last bit
         return result
 
-    # def decompress_string(self, stringdata, window_size):
-    #     i = 0
-    #     result = []
-    #     while i != len(stringdata):
-    #         if stringdata[i+window_size-1] == '0':
-    #             result.append(int(stringdata[i:i+window_size-1] + '0',2))
-    #         else:
-    #             result.append(-int(stringdata[i:i+window_size-1] + '0',2))
-    #         i += window_size
+    def decompress_string(self, stringdata, window_size):
+        i = 0
+        result = []
+        while i != len(stringdata):
+            if stringdata[i+window_size-1] == '0':
+                result.append(int(stringdata[i:i+window_size-1] + '0',2))
+            else:
+                result.append(-int(stringdata[i:i+window_size-1] + '0',2))
+            i += window_size
 
-    #     return result
+        return result
 
     def save_to_csv(self, data, filename='Ganglion_Data.csv'):
 
