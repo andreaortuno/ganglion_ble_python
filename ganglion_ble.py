@@ -1,4 +1,5 @@
 import bglib
+import serial
 from serial import Serial
 import time
 import struct
@@ -8,6 +9,7 @@ from pynput import keyboard
 import struct
 import numpy as np
 import csv
+from bitstring import BitArray
 
 # service for communication, as per docs
 BLE_SERVICE = [0xfe, 0x84]
@@ -232,29 +234,24 @@ class Ganglion():
 
     def bytes2data(self, raw_data):
         start_byte = raw_data[0]
-        data_string = ''
+        bit_array = BitArray()
         if start_byte == 0:
             print("ZERO PACKET")
             for byte in raw_data[1:13]:
-                data_string += '{0:08b}'.format(byte)
-            self.last_values = np.array(self.decompress_string(data_string, 24))
+                bit_array.append('0b{0:08b}'.format(byte))
+            results = []
+            for sub_array in bit_array.cut(24):
+                results.append(sub_array.int)
+            self.last_values = np.array(results)
             print(self.last_values)
             return [self.last_values]
         elif start_byte >=1 and start_byte <=100:
             for byte in raw_data[1:-1]:
-                data_string += '{0:08b}'.format(byte)
-            deltas = self.decompress_string(data_string, 18)
-            delta1 , delta2 = np.array(deltas[:4]) , np.array(deltas[4:])
-            self.last_values1 = self.last_values - delta1
-            print(self.last_values)
-            self.last_values = self.last_values1 - delta2
-            print(self.last_values)
-            return [self.last_values1, self.last_values]
+                bit_array.append('0b{0:08b}'.format(byte))
+            deltas = []
+            for sub_array in bit_array.cut(18):
+                deltas.append(self.decompress_signed(sub_array))
 
-        elif start_byte >=101 and start_byte <=200:
-            for byte in raw_data[1:]:
-                data_string += '{0:08b}'.format(byte)
-            deltas = self.decompress_string(data_string, 19)
             delta1 , delta2 = np.array(deltas[:4]) , np.array(deltas[4:])
             self.last_values1 = self.last_values - delta1
             print(self.last_values1)
@@ -262,17 +259,39 @@ class Ganglion():
             print(self.last_values)
             return [self.last_values1, self.last_values]
 
-    def decompress_string(self, stringdata, window_size):
-        i = 0
-        result = []
-        while i != len(stringdata):
-            if stringdata[i+window_size-1] == '0':
-                result.append(int(stringdata[i:i+window_size-1] + '0',2))
-            else:
-                result.append(-int(stringdata[i:i+window_size-1] + '0',2))
-            i += window_size
+        elif start_byte >=101 and start_byte <=200:
+            for byte in raw_data[1:]:
+                bit_array.append('0b{0:08b}'.format(byte))
+            deltas = []
+            for sub_array in bit_array.cut(19):
+                deltas.append(self.decompress_signed(sub_array))
 
+            delta1 , delta2 = np.array(deltas[:4]) , np.array(deltas[4:])
+            self.last_values1 = self.last_values - delta1
+            print(self.last_values1)
+            self.last_values = self.last_values1 - delta2
+            print(self.last_values)
+            return [self.last_values1, self.last_values]
+
+    # process a bitarray where the sign bit is the LSB
+    # return the signed integer result
+    def decompress_signed(self, bit_array):
+        result = bit_array.int
+        if bit_array.endswith('0b1'):   # negative value
+            result -= 1 # correct the last bit
         return result
+
+    # def decompress_string(self, stringdata, window_size):
+    #     i = 0
+    #     result = []
+    #     while i != len(stringdata):
+    #         if stringdata[i+window_size-1] == '0':
+    #             result.append(int(stringdata[i:i+window_size-1] + '0',2))
+    #         else:
+    #             result.append(-int(stringdata[i:i+window_size-1] + '0',2))
+    #         i += window_size
+
+    #     return result
 
     def save_to_csv(self, data, filename='Ganglion_Data.csv'):
 
