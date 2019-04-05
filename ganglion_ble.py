@@ -237,10 +237,13 @@ class Ganglion():
         bit_array = BitArray()
         if start_byte == 0:
             print("ZERO PACKET")
+            # we can just append everything to the bitarray
             for byte in raw_data[1:13]:
                 bit_array.append('0b{0:08b}'.format(byte))
             results = []
+            # and split it into 24-bit chunks here
             for sub_array in bit_array.cut(24):
+                # calling ".int" interprets the value as signed 2's complement
                 results.append(sub_array.int)
             self.last_values = np.array(results)
             print(self.last_values)
@@ -278,7 +281,7 @@ class Ganglion():
     def decompress_signed(self, bit_array):
         result = bit_array.int
         if bit_array.endswith('0b1'):   # negative value
-            result -= 1 # correct the last bit
+            result -= 1 # flip all the bits and add a zero at the end
         return result
 
     def decompress_string(self, stringdata, window_size):
