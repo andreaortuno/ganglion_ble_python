@@ -45,10 +45,11 @@ class Ganglion():
         self.received_found = False
         self.zero_packet = False
         self.last_values = np.array([0, 0, 0, 0])
+        self.last_id = None
 
         # create serial port object
         try:
-            self.ser = Serial(port=self.port, baudrate=self.baud_rate, timeout=1, writeTimeout=1)
+            self.ser = Serial(port=self.port, baudrate=self.baud_rate, timeout=10, writeTimeout=2)
         except serial.SerialException as e:
             print "\n================================================================"
             print "Port error (name='%s', baud='%ld'): %s" % (self.port, self.baud_rate, e)
@@ -126,10 +127,11 @@ class Ganglion():
 
         # attclient_attribute_value handler
         def my_ble_evt_attclient_attribute_value(sender, args):
-            # check for a new value from the connected peripheral's heart rate measurement attribute
-            if args['connection'] == self.connection_handle and args['atthandle'] == self.receive_handle:
-                self.save_to_csv(self.bytes2data(args['value']))
-
+            if self.connected:
+                # check for a new value from the connected peripheral's ganglion measurement attribute
+                if args['connection'] == self.connection_handle and args['atthandle'] == self.receive_handle:
+                    # add function to do
+                    self.save_to_csv(self.bytes2data(args['value']))
 
         # add handlers for BGAPI events
         self.board.ble_evt_gap_scan_response += my_ble_evt_gap_scan_response
@@ -194,11 +196,12 @@ class Ganglion():
         # (this is done by writing 0x01 to the client characteristic configuration attribute)
         print('Starting stream')
         self.board.check_activity(self.ser, 1)
+        self.board.send_command(self.ser, self.board.ble_cmd_attclient_attribute_write(self.connection_handle, self.receive_handle_ccc, [0x01, 0x00]))
 
         while True:
-            self.board.send_command(self.ser, self.board.ble_cmd_attclient_attribute_write(self.connection_handle, self.receive_handle_ccc, [0x01, 0x00]))
-            self.board.check_activity(self.ser, 1)
-            time.sleep(0.01)
+            # self.board.send_command(self.ser, self.board.ble_cmd_attclient_attribute_write(self.connection_handle, self.receive_handle_ccc, [0x01, 0x00]))
+            self.board.check_activity(self.ser)
+            # time.sleep(0.00001)
 
     def set_channels(self, chan_list):
         """
@@ -235,9 +238,10 @@ class Ganglion():
     def bytes2data(self, raw_data):
         start_byte = raw_data[0]
         bit_array = BitArray()
+        self.check_dropped(start_byte)
         if start_byte == 0:
-            print("ZERO PACKET")
             # we can just append everything to the bitarray
+            print("Zero Packet")
             for byte in raw_data[1:13]:
                 bit_array.append('0b{0:08b}'.format(byte))
             results = []
@@ -246,7 +250,7 @@ class Ganglion():
                 # calling ".int" interprets the value as signed 2's complement
                 results.append(sub_array.int)
             self.last_values = np.array(results)
-            print(self.last_values)
+            # print(self.last_values)
             return [self.last_values]
         elif start_byte >=1 and start_byte <=100:
             for byte in raw_data[1:-1]:
@@ -257,9 +261,9 @@ class Ganglion():
 
             delta1 , delta2 = np.array(deltas[:4]) , np.array(deltas[4:])
             self.last_values1 = self.last_values - delta1
-            print(self.last_values1)
+            # print(self.last_values1)
             self.last_values = self.last_values1 - delta2
-            print(self.last_values)
+            # print(self.last_values)
             return [self.last_values1, self.last_values]
 
         elif start_byte >=101 and start_byte <=200:
@@ -271,10 +275,11 @@ class Ganglion():
 
             delta1 , delta2 = np.array(deltas[:4]) , np.array(deltas[4:])
             self.last_values1 = self.last_values - delta1
-            print(self.last_values1)
+            # print(self.last_values1)
             self.last_values = self.last_values1 - delta2
-            print(self.last_values)
+            # print(self.last_values)
             return [self.last_values1, self.last_values]
+
 
     # process a bitarray where the sign bit is the LSB
     # return the signed integer result
@@ -284,19 +289,20 @@ class Ganglion():
             result -= 1 # flip all the bits and add a zero at the end
         return result
 
-    def decompress_string(self, stringdata, window_size):
-        i = 0
-        result = []
-        while i != len(stringdata):
-            if stringdata[i+window_size-1] == '0':
-                result.append(int(stringdata[i:i+window_size-1] + '0',2))
-            else:
-                result.append(-int(stringdata[i:i+window_size-1] + '0',2))
-            i += window_size
 
-        return result
+    def check_dropped(self, packet_id):
+        #check for dropped packets
+        if self.last_id:
+            if packet_id != 0 and packet_id > self.last_id:
+                if int(packet_id) - 1 != self.last_id:
+                    print("Warning: dropped " + str(- self.last_id + packet_id) + " packets.")
+            elif self.last_id not in [199, 99]:
+                print("Warning: dropped " + str(99 - self.last_id + packet_id) + " packets.")
 
-    def save_to_csv(self, data, filename='Ganglion_Data.csv'):
+
+        self.last_id = packet_id
+
+    def save_to_csv(self, data, filename='Ganglion_Data.txt'):
 
         csvData = data
 

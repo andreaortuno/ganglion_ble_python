@@ -1,6 +1,7 @@
 from ganglion_ble import Ganglion
 
-board = Ganglion(port='COM6', mac_addrs='E65D54F2F438')
+# C409C1112D76
+board = Ganglion(port='COM6', mac_addrs='EF35B41DB3DF')
 board.connect()
 print('connected')
 board.send_board_command('[')
