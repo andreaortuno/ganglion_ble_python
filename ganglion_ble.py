@@ -10,6 +10,7 @@ import struct
 import numpy as np
 import csv
 from bitstring import BitArray
+from pylsl import StreamInfo, StreamOutlet
 
 # service for communication, as per docs
 BLE_SERVICE = [0xfe, 0x84]
@@ -29,13 +30,14 @@ STATE_STREAMING = 5
 
 
 class Ganglion():
-    def __init__(self, port=None, baud_rate=115200, mac_addrs=None):
+    def __init__(self, port=None, baud_rate=230400, mac_addrs=None):
 
         if not port or not mac_addrs:
             raise ValueError('You need to have a port name adn a mac_addrs')
         self.port = port
         self.baud_rate = baud_rate
         self.board = bglib.BGLib()
+        self.board.packet_mode = False
         self.mac = mac_addrs
         self.board.debug = False
 
@@ -45,11 +47,17 @@ class Ganglion():
         self.received_found = False
         self.zero_packet = False
         self.last_values = np.array([0, 0, 0, 0])
-        self.last_id = None
+        self.last_id = 9999
+        self.dropped_packets = 0
+
+        #for lsl streaming
+        self.info = StreamInfo('OpenBCIGanglion', 'EEG', 4, 200, 'float32', 'mac_addrs')
+
+        self.outlet = StreamOutlet(self.info)
 
         # create serial port object
         try:
-            self.ser = Serial(port=self.port, baudrate=self.baud_rate, timeout=10, writeTimeout=2)
+            self.ser = Serial(port=self.port, baudrate=self.baud_rate, timeout=1, writeTimeout=1)
         except serial.SerialException as e:
             print "\n================================================================"
             print "Port error (name='%s', baud='%ld'): %s" % (self.port, self.baud_rate, e)
@@ -131,7 +139,15 @@ class Ganglion():
                 # check for a new value from the connected peripheral's ganglion measurement attribute
                 if args['connection'] == self.connection_handle and args['atthandle'] == self.receive_handle:
                     # add function to do
-                    self.save_to_csv(self.bytes2data(args['value']))
+                    if self.stream_type.upper() == 'TXT':
+                        self.save_to_file(self.bytes2data(args['value']))
+                    if self.stream_type.upper() == 'LSL':
+                        if len(args['value']) == 4:
+                            self.outlet.push_sample(args['value'])
+                        elif len(args['value']) == 8:
+                            self.outlet.push_sample(args['value'][:4])
+                            self.outlet.push_sample(args['value'][4:])
+
 
         # add handlers for BGAPI events
         self.board.ble_evt_gap_scan_response += my_ble_evt_gap_scan_response
@@ -191,17 +207,16 @@ class Ganglion():
                     print "Could not find send attribute"
 
 
-    def start_stream(self):
+    def start_stream(self, type="txt"):
         # found the measurement + client characteristic configuration, so enable notifications
         # (this is done by writing 0x01 to the client characteristic configuration attribute)
         print('Starting stream')
         self.board.check_activity(self.ser, 1)
         self.board.send_command(self.ser, self.board.ble_cmd_attclient_attribute_write(self.connection_handle, self.receive_handle_ccc, [0x01, 0x00]))
-
+        self.stream_type = type
         while True:
             # self.board.send_command(self.ser, self.board.ble_cmd_attclient_attribute_write(self.connection_handle, self.receive_handle_ccc, [0x01, 0x00]))
-            self.board.check_activity(self.ser)
-            # time.sleep(0.00001)
+            self.board.check_activity(self.ser, .01)
 
     def set_channels(self, chan_list):
         """
@@ -251,7 +266,7 @@ class Ganglion():
                 results.append(sub_array.int)
             self.last_values = np.array(results)
             # print(self.last_values)
-            return [self.last_values]
+            return [np.append(start_byte, self.last_values)]
         elif start_byte >=1 and start_byte <=100:
             for byte in raw_data[1:-1]:
                 bit_array.append('0b{0:08b}'.format(byte))
@@ -278,7 +293,7 @@ class Ganglion():
             # print(self.last_values1)
             self.last_values = self.last_values1 - delta2
             # print(self.last_values)
-            return [self.last_values1, self.last_values]
+            return [np.append(start_byte,self.last_values1), np.append(start_byte,self.last_values)]
 
 
     # process a bitarray where the sign bit is the LSB
@@ -292,25 +307,43 @@ class Ganglion():
 
     def check_dropped(self, packet_id):
         #check for dropped packets
-        if self.last_id:
+        if self.last_id != 9999:
             if packet_id != 0 and packet_id > self.last_id:
-                if int(packet_id) - 1 != self.last_id:
-                    print("Warning: dropped " + str(- self.last_id + packet_id) + " packets.")
-            elif self.last_id not in [199, 99]:
-                print("Warning: dropped " + str(99 - self.last_id + packet_id) + " packets.")
+                if int(packet_id) - 1 not in [self.last_id, 100]:
+                    # print("Warning: dropped " + str(- self.last_id + packet_id) + " packets.")
+                    print([self.last_id, packet_id, packet_id - self.last_id])
+                    if self.last_id:
+                        self.dropped_packets += (- self.last_id + packet_id)
+                    else:
+                        self.dropped_packets += (- self.last_id + packet_id-100)
+
+                    if packet_id in [100, 200]:
+                        print('Dropped in this cycle: ' + str(self.dropped_packets))
+                        self.dropped_packets = 0
+
+            elif self.last_id not in [100, 200] and packet_id != 0:
+                # print("Warning: dropped " + str(99 - self.last_id + packet_id) + " packets.")
+                print([self.last_id, packet_id, 200-self.last_id + packet_id -100])
+                print('Dropped in this cycle: ' + str(self.dropped_packets + 200 - self.last_id))
+                self.dropped_packets = 0
+            else:
+                if self.last_id not in [200, 100]:
+                    self.dropped_packets += 1
+                    print('Dropped in this cycle: ' + str(self.dropped_packets + 200 - self.last_id))
+                    self.dropped_packets = 0
 
 
         self.last_id = packet_id
 
-    def save_to_csv(self, data, filename='Ganglion_Data.txt'):
+    def save_to_file(self, data, filename='Ganglion_Data.txt'):
 
-        csvData = data
+        Data = data
 
-        with open(filename, 'ab') as csvFile:
-            writer = csv.writer(csvFile)
-            writer.writerows(csvData)
+        with open(filename, 'ab') as file:
+            writer = csv.writer(file)
+            writer.writerows(Data)
 
-        csvFile.close()
+        file.close()
 
 
     def graph_data(self, data):
