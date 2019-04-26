@@ -5,12 +5,13 @@ import time
 import struct
 import datetime
 import sys
-from pynput import keyboard
 import struct
 import numpy as np
 import csv
+import atexit
 from bitstring import BitArray
 from pylsl import StreamInfo, StreamOutlet
+
 
 # service for communication, as per docs
 BLE_SERVICE = [0xfe, 0x84]
@@ -49,6 +50,10 @@ class Ganglion():
         self.last_values = np.array([0, 0, 0, 0])
         self.last_id = 9999
         self.dropped_packets = 0
+
+
+        # Disconnects from board when terminated
+        atexit.register(self.disconnect)
 
         #for lsl streaming
         # self.info = StreamInfo('OpenBCIGanglion', 'EEG', 4, 200, 'float32', 'mac_addrs')
@@ -216,8 +221,8 @@ class Ganglion():
         self.stream_type = type
         while True:
             # self.board.send_command(self.ser, self.board.ble_cmd_attclient_attribute_write(self.connection_handle, self.receive_handle_ccc, [0x01, 0x00]))
-            self.board.check_activity(self.ser, 0.005)
-            time.sleep(0.005)
+            self.board.check_activity(self.ser, 0)
+            time.sleep(0.0000001)
 
     def set_channels(self, chan_list):
         """
