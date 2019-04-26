@@ -30,7 +30,7 @@ STATE_STREAMING = 5
 
 
 class Ganglion():
-    def __init__(self, port=None, baud_rate=230400, mac_addrs=None):
+    def __init__(self, port=None, baud_rate=115200, mac_addrs=None):
 
         if not port or not mac_addrs:
             raise ValueError('You need to have a port name adn a mac_addrs')
@@ -51,13 +51,13 @@ class Ganglion():
         self.dropped_packets = 0
 
         #for lsl streaming
-        self.info = StreamInfo('OpenBCIGanglion', 'EEG', 4, 200, 'float32', 'mac_addrs')
-
-        self.outlet = StreamOutlet(self.info)
+        # self.info = StreamInfo('OpenBCIGanglion', 'EEG', 4, 200, 'float32', 'mac_addrs')
+        #
+        # self.outlet = StreamOutlet(self.info)
 
         # create serial port object
         try:
-            self.ser = Serial(port=self.port, baudrate=self.baud_rate, timeout=1, writeTimeout=1)
+            self.ser = Serial(port=self.port, baudrate=self.baud_rate, timeout=0.005, writeTimeout=1)
         except serial.SerialException as e:
             print "\n================================================================"
             print "Port error (name='%s', baud='%ld'): %s" % (self.port, self.baud_rate, e)
@@ -69,7 +69,7 @@ class Ganglion():
         # BGAPI Events responses
         def my_ble_evt_gap_scan_response(sender, args):
             uuid_gang_service = [0xfe, 0x84]
-
+            # print('Gap_scan_response')
             # pull all advertised service info from ad packet
             ad_services = []
             this_field = []
@@ -100,7 +100,7 @@ class Ganglion():
 
         # connection_status handler
         def my_ble_evt_connection_status(sender, args):
-
+            # print('event connection_status')
             if (args['flags'] & 0x05) == 0x05:
                 # connected, now perform characteristic discovery
                 print "Connected to %s" % ':'.join(['%02X' % b for b in args['address'][::-1]])
@@ -112,7 +112,7 @@ class Ganglion():
 
         # attclient_group_found handler
         def ble_evt_attclient_find_information_found(sender, args):
-
+            # print("ble_cmd_attclient_find_information_found")
             # check for OpenBCI characteristics
             if BLE_CHAR_RECEIVE.upper() == ''.join(['%02X' % b for b in args['uuid'][::-1]]):
                 print('Receive characteristic found!')
@@ -216,7 +216,8 @@ class Ganglion():
         self.stream_type = type
         while True:
             # self.board.send_command(self.ser, self.board.ble_cmd_attclient_attribute_write(self.connection_handle, self.receive_handle_ccc, [0x01, 0x00]))
-            self.board.check_activity(self.ser, .01)
+            self.board.check_activity(self.ser, 0.005)
+            time.sleep(0.005)
 
     def set_channels(self, chan_list):
         """
@@ -252,48 +253,49 @@ class Ganglion():
 
     def bytes2data(self, raw_data):
         start_byte = raw_data[0]
-        bit_array = BitArray()
-        self.check_dropped(start_byte)
-        if start_byte == 0:
-            # we can just append everything to the bitarray
-            print("Zero Packet")
-            for byte in raw_data[1:13]:
-                bit_array.append('0b{0:08b}'.format(byte))
-            results = []
-            # and split it into 24-bit chunks here
-            for sub_array in bit_array.cut(24):
-                # calling ".int" interprets the value as signed 2's complement
-                results.append(sub_array.int)
-            self.last_values = np.array(results)
-            # print(self.last_values)
-            return [np.append(start_byte, self.last_values)]
-        elif start_byte >=1 and start_byte <=100:
-            for byte in raw_data[1:-1]:
-                bit_array.append('0b{0:08b}'.format(byte))
-            deltas = []
-            for sub_array in bit_array.cut(18):
-                deltas.append(self.decompress_signed(sub_array))
-
-            delta1 , delta2 = np.array(deltas[:4]) , np.array(deltas[4:])
-            self.last_values1 = self.last_values - delta1
-            # print(self.last_values1)
-            self.last_values = self.last_values1 - delta2
-            # print(self.last_values)
-            return [self.last_values1, self.last_values]
-
-        elif start_byte >=101 and start_byte <=200:
-            for byte in raw_data[1:]:
-                bit_array.append('0b{0:08b}'.format(byte))
-            deltas = []
-            for sub_array in bit_array.cut(19):
-                deltas.append(self.decompress_signed(sub_array))
-
-            delta1 , delta2 = np.array(deltas[:4]) , np.array(deltas[4:])
-            self.last_values1 = self.last_values - delta1
-            # print(self.last_values1)
-            self.last_values = self.last_values1 - delta2
-            # print(self.last_values)
-            return [np.append(start_byte,self.last_values1), np.append(start_byte,self.last_values)]
+        # bit_array = BitArray()
+        # self.check_dropped(start_byte)
+        return start_byte
+        # if start_byte == 0:
+        #     # we can just append everything to the bitarray
+        #     print("Zero Packet")
+        #     for byte in raw_data[1:13]:
+        #         bit_array.append('0b{0:08b}'.format(byte))
+        #         results = []
+        #         # and split it into 24-bit chunks here
+        #         for sub_array in bit_array.cut(24):
+        #             # calling ".int" interprets the value as signed 2's complement
+        #             results.append(sub_array.int)
+        #             self.last_values = np.array(results)
+        #             # print(self.last_values)
+        #             return [np.append(start_byte, self.last_values)]
+        #         elif start_byte >=1 and start_byte <=100:
+        #             for byte in raw_data[1:-1]:
+        #                 bit_array.append('0b{0:08b}'.format(byte))
+        #                 deltas = []
+        #                 for sub_array in bit_array.cut(18):
+        #                     deltas.append(self.decompress_signed(sub_array))
+        #
+        #                     delta1 , delta2 = np.array(deltas[:4]) , np.array(deltas[4:])
+        #                     self.last_values1 = self.last_values - delta1
+        #                     # print(self.last_values1)
+        #                     self.last_values = self.last_values1 - delta2
+        #                     # print(self.last_values)
+        # #                     return [self.last_values1, self.last_values]
+        #
+        # elif start_byte >=101 and start_byte <=200:
+        #     for byte in raw_data[1:]:
+        #         bit_array.append('0b{0:08b}'.format(byte))
+        #     deltas = []
+        #     for sub_array in bit_array.cut(19):
+        #         deltas.append(self.decompress_signed(sub_array))
+        #
+        #     delta1 , delta2 = np.array(deltas[:4]) , np.array(deltas[4:])
+        #     self.last_values1 = self.last_values - delta1
+        #     # print(self.last_values1)
+        #     self.last_values = self.last_values1 - delta2
+        #     # print(self.last_values)
+        #     return [np.append(start_byte,self.last_values1), np.append(start_byte,self.last_values)]
 
 
     # process a bitarray where the sign bit is the LSB
@@ -336,14 +338,17 @@ class Ganglion():
         self.last_id = packet_id
 
     def save_to_file(self, data, filename='Ganglion_Data.txt'):
-
-        Data = data
-
         with open(filename, 'ab') as file:
-            writer = csv.writer(file)
-            writer.writerows(Data)
+            file.write(str(data) + '\n')
 
         file.close()
+        # Data = data
+        #
+        # with open(filename, 'ab') as file:
+        #     writer = csv.writer(file)
+        #     writer.writerows(Data)
+        #
+        # file.close()
 
 
     def graph_data(self, data):
